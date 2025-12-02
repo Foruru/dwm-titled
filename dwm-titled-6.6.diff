@@ -1,0 +1,285 @@
+From b11f03c8eef7342abf956aeb11d81d00c4b0f2f8 Mon Sep 17 00:00:00 2001
+From: Foruru <dfgdgf278@gmail.com>
+Date: Tue, 2 Dec 2025 19:43:35 +0200
+Subject: [PATCH] Add title window to clients
+
+---
+ config.def.h |   2 +
+ dwm.c        | 116 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 118 insertions(+)
+
+diff --git a/config.def.h b/config.def.h
+index 81c3fc0..d46cd76 100644
+--- a/config.def.h
++++ b/config.def.h
+@@ -4,6 +4,7 @@
+ static const unsigned int borderpx  = 1;        /* border pixel of windows */
+ static const unsigned int snap      = 32;       /* snap pixel */
+ static const int showbar            = 1;        /* 0 means no bar */
++static const int showtitle          = 1;        /* 0 means no title */
+ static const int topbar             = 1;        /* 0 means bottom bar */
+ static const char *fonts[]          = { "monospace:size=10" };
+ static const char dmenufont[]       = "monospace:size=10";
+@@ -66,6 +67,7 @@ static const Key keys[] = {
+ 	{ MODKEY,                       XK_p,      spawn,          {.v = dmenucmd } },
+ 	{ MODKEY|ShiftMask,             XK_Return, spawn,          {.v = termcmd } },
+ 	{ MODKEY,                       XK_b,      togglebar,      {0} },
++	{ MODKEY,                       XK_v,      toggletitle,    {0} },
+ 	{ MODKEY,                       XK_j,      focusstack,     {.i = +1 } },
+ 	{ MODKEY,                       XK_k,      focusstack,     {.i = -1 } },
+ 	{ MODKEY,                       XK_i,      incnmaster,     {.i = +1 } },
+diff --git a/dwm.c b/dwm.c
+index 4f345ee..019f24a 100644
+--- a/dwm.c
++++ b/dwm.c
+@@ -55,6 +55,7 @@
+ #define HEIGHT(X)               ((X)->h + 2 * (X)->bw)
+ #define TAGMASK                 ((1 << LENGTH(tags)) - 1)
+ #define TEXTW(X)                (drw_fontset_getwidth(drw, (X)) + lrpad)
++#define SKIPNOTSHOWED(X)        if (selmon->showtitle) {X}
+ 
+ /* enums */
+ enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
+@@ -96,6 +97,8 @@ struct Client {
+ 	Client *snext;
+ 	Monitor *mon;
+ 	Window win;
++	Window titlewin;
++    int title_mapped;
+ };
+ 
+ typedef struct {
+@@ -122,6 +125,7 @@ struct Monitor {
+ 	unsigned int sellt;
+ 	unsigned int tagset[2];
+ 	int showbar;
++	int showtitle;
+ 	int topbar;
+ 	Client *clients;
+ 	Client *sel;
+@@ -209,6 +213,7 @@ static void tag(const Arg *arg);
+ static void tagmon(const Arg *arg);
+ static void tile(Monitor *m);
+ static void togglebar(const Arg *arg);
++static void toggletitle(const Arg *arg);
+ static void togglefloating(const Arg *arg);
+ static void toggletag(const Arg *arg);
+ static void toggleview(const Arg *arg);
+@@ -639,6 +644,7 @@ createmon(void)
+ 	m->mfact = mfact;
+ 	m->nmaster = nmaster;
+ 	m->showbar = showbar;
++	m->showtitle = showtitle;
+ 	m->topbar = topbar;
+ 	m->lt[0] = &layouts[0];
+ 	m->lt[1] = &layouts[1 % LENGTH(layouts)];
+@@ -802,12 +808,18 @@ focus(Client *c)
+ 		grabbuttons(c, 1);
+ 		XSetWindowBorder(dpy, c->win, scheme[SchemeSel][ColBorder].pixel);
+ 		setfocus(c);
++        SKIPNOTSHOWED(
++        drw_setscheme(drw, scheme[1 ? SchemeSel : SchemeNorm]);
++        drw_text(drw, 0, 0, c->w + c->bw * 2, bh, lrpad / 2, c->name, 0);
++        drw_map(drw, c->titlewin, 0, 0, c->w + c->bw * 2, bh);
++                      )
+ 	} else {
+ 		XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
+ 		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
+ 	}
+ 	selmon->sel = c;
+ 	drawbars();
++
+ }
+ 
+ /* there are some broken focus acquiring clients needing extra handling */
+@@ -1043,6 +1055,30 @@ manage(Window w, XWindowAttributes *wa)
+ 	c->h = c->oldh = wa->height;
+ 	c->oldbw = wa->border_width;
+ 
++     XSetWindowAttributes _wa = {
++		.override_redirect = True,
++		.background_pixmap = ParentRelative,
++        .event_mask = StructureNotifyMask | ExposureMask | KeyPressMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask
++	};
++
++	XClassHint ch = {"dwm", "title"};
++	c->titlewin = XCreateWindow(dpy, root, c->x, c->y - bh, c->w + c->bw * 2, bh, 0, DefaultDepth(dpy, screen),
++			CopyFromParent, DefaultVisual(dpy, screen),
++			CWOverrideRedirect|CWBackPixmap|CWEventMask, &_wa);
++
++    XDefineCursor(dpy, c->titlewin, cursor[CurNormal]->cursor);
++    XMapRaised(dpy, c->titlewin);
++    XMapRaised(dpy, selmon->barwin);
++    XMapRaised(dpy, c->win);
++    XSetClassHint(dpy, c->titlewin, &ch);
++    SKIPNOTSHOWED(
++    drw_setscheme(drw, scheme[1 ? SchemeSel : SchemeNorm]);
++    drw_text(drw, 0, 0, c->w + c->bw * 2, bh, lrpad / 2, c->name, 0);
++    drw_map(drw, c->titlewin, 0, 0, c->w + c->bw * 2, bh);
++                  )
++
++    c->title_mapped = 0;
++
+ 	updatetitle(c);
+ 	if (XGetTransientForHint(dpy, w, &trans) && (t = wintoclient(trans))) {
+ 		c->mon = t->mon;
+@@ -1162,6 +1198,16 @@ movemouse(const Arg *arg)
+ 		return;
+ 	if (!getrootptr(&x, &y))
+ 		return;
++
++    if (!c->title_mapped && c->titlewin) {
++        SKIPNOTSHOWED(
++        XMapRaised(dpy, c->titlewin);
++        XMapRaised(dpy, selmon->barwin);
++        XMapRaised(dpy, c->win);
++                      )
++        c->title_mapped = 1;
++    }
++
+ 	do {
+ 		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
+ 		switch(ev.type) {
+@@ -1169,6 +1215,19 @@ movemouse(const Arg *arg)
+ 		case Expose:
+ 		case MapRequest:
+ 			handler[ev.type](&ev);
++
++            SKIPNOTSHOWED(
++            drw_setscheme(drw, scheme[0 ? SchemeSel : SchemeNorm]);
++            for (Client *c = selmon->clients; c; c = c->next) {
++                drw_text(drw, 0, 0, c->w + c->bw * 2, bh, lrpad / 2, c->name, 0);
++                drw_map(drw, c->titlewin, 0, 0, c->w + c->bw * 2, bh);
++            }
++
++            c = selmon->sel;
++            drw_setscheme(drw, scheme[1 ? SchemeSel : SchemeNorm]);
++            drw_text(drw, 0, 0, c->w + c->bw * 2, bh, lrpad / 2, c->name, 0);
++            drw_map(drw, c->titlewin, 0, 0, c->w + c->bw * 2, bh);
++                          )
+ 			break;
+ 		case MotionNotify:
+ 			if ((ev.xmotion.time - lasttime) <= (1000 / refreshrate))
+@@ -1199,6 +1258,8 @@ movemouse(const Arg *arg)
+ 		selmon = m;
+ 		focus(NULL);
+ 	}
++
++    c->title_mapped = 0;
+ }
+ 
+ Client *
+@@ -1294,6 +1355,10 @@ resizeclient(Client *c, int x, int y, int w, int h)
+ 	XConfigureWindow(dpy, c->win, CWX|CWY|CWWidth|CWHeight|CWBorderWidth, &wc);
+ 	configure(c);
+ 	XSync(dpy, False);
++
++    SKIPNOTSHOWED(
++    XMoveResizeWindow(dpy, c->titlewin, c->x, c->y - bh, c->w + c->bw * 2, bh);
++                  )
+ }
+ 
+ void
+@@ -1316,6 +1381,16 @@ resizemouse(const Arg *arg)
+ 		None, cursor[CurResize]->cursor, CurrentTime) != GrabSuccess)
+ 		return;
+ 	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + c->bw - 1, c->h + c->bw - 1);
++
++    if (!c->title_mapped && c->titlewin) {
++        SKIPNOTSHOWED(
++        XMapRaised(dpy, c->titlewin);
++        XMapRaised(dpy, selmon->barwin);
++        XMapRaised(dpy, c->win);
++                  )
++        c->title_mapped = 1;
++    }
++
+ 	do {
+ 		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
+ 		switch(ev.type) {
+@@ -1323,6 +1398,19 @@ resizemouse(const Arg *arg)
+ 		case Expose:
+ 		case MapRequest:
+ 			handler[ev.type](&ev);
++
++            SKIPNOTSHOWED(
++            drw_setscheme(drw, scheme[0 ? SchemeSel : SchemeNorm]);
++            for (Client *c = selmon->clients; c; c = c->next) {
++                drw_text(drw, 0, 0, c->w + c->bw * 2, bh, lrpad / 2, c->name, 0);
++                drw_map(drw, c->titlewin, 0, 0, c->w + c->bw * 2, bh);
++            }
++
++            c = selmon->sel;
++            drw_setscheme(drw, scheme[1 ? SchemeSel : SchemeNorm]);
++            drw_text(drw, 0, 0, c->w + c->bw * 2, bh, lrpad / 2, c->name, 0);
++            drw_map(drw, c->titlewin, 0, 0, c->w + c->bw * 2, bh);
++                          )
+ 			break;
+ 		case MotionNotify:
+ 			if ((ev.xmotion.time - lasttime) <= (1000 / refreshrate))
+@@ -1351,6 +1439,8 @@ resizemouse(const Arg *arg)
+ 		selmon = m;
+ 		focus(NULL);
+ 	}
++
++    c->title_mapped = 0;
+ }
+ 
+ void
+@@ -1720,6 +1810,23 @@ togglebar(const Arg *arg)
+ 	arrange(selmon);
+ }
+ 
++void
++toggletitle(const Arg *arg)
++{
++	selmon->showtitle = !selmon->showtitle;
++    drw_setscheme(drw, scheme[0 ? SchemeSel : SchemeNorm]);
++    for (Client *c = selmon->clients; c; c = c->next)
++        if (selmon->showtitle) {
++            if (selmon->sel == c)
++                drw_setscheme(drw, scheme[1 ? SchemeSel : SchemeNorm]);
++            XMoveResizeWindow(dpy, c->titlewin, c->x, c->y - bh, c->w + c->bw * 2, bh);
++            drw_text(drw, 0, 0, c->w + c->bw * 2, bh, lrpad / 2, c->name, 0);
++            drw_map(drw, c->titlewin, 0, 0, c->w + c->bw * 2, bh);
++        } else
++            XMoveResizeWindow(dpy, c->titlewin, 0, -bh, selmon->ww, bh);
++    arrange(selmon);
++}
++
+ void
+ togglefloating(const Arg *arg)
+ {
+@@ -1772,6 +1879,12 @@ unfocus(Client *c, int setfocus)
+ 		XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
+ 		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
+ 	}
++
++    SKIPNOTSHOWED(
++    drw_setscheme(drw, scheme[0 ? SchemeSel : SchemeNorm]);
++    drw_text(drw, 0, 0, c->w + c->bw * 2, bh, lrpad / 2, c->name, 0);
++	drw_map(drw, c->titlewin, 0, 0, c->w + c->bw * 2, bh);
++                  )
+ }
+ 
+ void
+@@ -1794,6 +1907,7 @@ unmanage(Client *c, int destroyed)
+ 		XSetErrorHandler(xerror);
+ 		XUngrabServer(dpy);
+ 	}
++    XDestroyWindow(dpy, c->titlewin);
+ 	free(c);
+ 	focus(NULL);
+ 	updateclientlist();
+@@ -2016,6 +2130,8 @@ updatetitle(Client *c)
+ 		gettextprop(c->win, XA_WM_NAME, c->name, sizeof c->name);
+ 	if (c->name[0] == '\0') /* hack to mark broken clients */
+ 		strcpy(c->name, broken);
++
++    drw_text(drw, 0, 0, c->w + c->bw * 2, bh, lrpad / 2, c->name, 0);
+ }
+ 
+ void
+-- 
+2.51.2
+
